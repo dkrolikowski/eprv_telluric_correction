@@ -27,16 +27,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tqdm
 
-from . import tellurics_utils
+import tellurics_utils
 
 ##### Setup
 
 ### Input argument(s)
 parser = argparse.ArgumentParser(description='Generating telluric model')
-parser.add_argument('data_path', type=str, required=True, help='Path to data files')
-parser.add_argument('instrument', type=str, default='HPF', help='Instrument used for observations')
-parser.add_argument('output_path', type=str, default='', help='Path to place output at')
-parser.add_argument('make_plots', type=bool, default=True, help='Path to place output at')
+parser.add_argument('data_path', type=str, help='Path to data files')
+parser.add_argument('--instrument', type=str, default='HPF', help='Instrument used for observations')
+parser.add_argument('--output_path', type=str, default='', help='Path to place output at')
+parser.add_argument('--make_plots', type=bool, default=True, help='Path to place output at')
 args = parser.parse_args()
 
 ### Input/output: paths and files
@@ -72,7 +72,7 @@ blaze_hpf_post = np.load('data/hpf_blaze/quartz_blaze_spline_fit_post_maintenanc
 fiber = 'Sci'
 
 # Read in the fit result files -- PSF fit results and orthogonal polynomial basis
-psf_fit_results = pickle.load(open(f'data/hpf_lsf/PSF_Fit_Results_fiber_{fiber}.pkl'), 'rb')
+psf_fit_results = pickle.load(open(f'data/hpf_lsf/PSF_Fit_Results_fiber_{fiber}.pkl', 'rb'))
 ortho_poly_fit_results = np.load(f'data/hpf_lsf/HPF_PSF_{fiber}_OrthoP.npy', allow_pickle=True)
 
 # The hat width parameter for the HPF LSF
@@ -190,5 +190,5 @@ for i_file, file_name in enumerate(tqdm.tqdm(input_file_names)):
     output_hdu_list = copy.copy(file_in)
     output_hdu_list.append(telluric_hdu)
 
-    output_file_name = os.path.join(output_dir, os.path.basename(file_in))
+    output_file_name = os.path.join(output_dir, os.path.basename(file_name))
     output_hdu_list.writeto(output_file_name, overwrite=True)
