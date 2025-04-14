@@ -546,6 +546,10 @@ def fit_pwv_hpf( data_wavelengths, data_fluxes, blaze, fit_padding, kernel_half_
      
     # Pull telluric model grid info -- the zenith angle/water column grid points and the full model wavelength array
     grid_zeniths, grid_waters, grid_wavelengths = parse_model_grid_points_hpf( grid_path )
+    grid_name_suffix = os.path.basename(grid_path).split('-')[-1]
+
+    # Temporary use of the only zenith angle in the grid
+    zenith_use = grid_zeniths[0]
 
     # Initializing the grid values for interpolation: first array is the set of PWV grid points and the second will hold the fit range data wavelength values
     fit_grid_points = [ grid_waters, [] ]
@@ -655,7 +659,7 @@ def fit_pwv_hpf( data_wavelengths, data_fluxes, blaze, fit_padding, kernel_half_
         for i_water, water in enumerate( grid_waters ):
 
             # Interpolate the line absorption model at the grid water vapor value to the given zenith angle (zi = zenith interpolated)
-            absorptions_zi = np.load( os.path.join( grid_path, 'hpf_TelluricModel_H2OLines_Z35PWV{:02d}_20240212_v001.npy'.format( water ) ) )
+            absorptions_zi = np.load( os.path.join( grid_path, 'hpf_TelluricModel_H2OLines_Z{:02d}PWV{:02d}-{}.npy'.format( zenith_use, water, grid_name_suffix ) ) )
 
             # Rebin the model to the padded equally spaced wavelength grid
             absorptions_zi_rebin = rebin_spectrum( grid_model_wavelength_equal_space, grid_wavelengths, absorptions_zi )
@@ -718,19 +722,24 @@ def generate_full_telluric_model( data_wavelengths, fit_padding, kernel_half_wid
      
     # Pull telluric model grid info -- the zenith angle/water column grid points and the full model wavelength array
     grid_zeniths, grid_waters, grid_wavelengths = parse_model_grid_points_hpf( grid_path )
+    grid_name_suffix = os.path.basename(grid_path).split('-')[-1]
+
+    # Temporary use of the only zenith angle in the grid
+    zenith_use = grid_zeniths[0]
 
     # Interpolate continuum and H2O model to the fit PWV value
-    grid_absorptions_h2o = interpolate_model_grid_hpf( grid_path, 35.0, fit_pwv_value, 'lines' )
-    grid_absorptions_cont = interpolate_model_grid_hpf( grid_path, 35.0, fit_pwv_value, 'continuum' )
+    grid_absorptions_h2o = interpolate_model_grid_hpf( grid_path, zenith_use, fit_pwv_value, 'lines' )
+    grid_absorptions_cont = interpolate_model_grid_hpf( grid_path, zenith_use, fit_pwv_value, 'continuum' )
     
     # Read in the other species
-    grid_absorptions_o2 = np.load( os.path.join( grid_path, 'hpf_TelluricModel_O2Lines_Z35PWV05_20240212_v001.npy' ) )
-    grid_absorptions_co2 = np.load( os.path.join( grid_path, 'hpf_TelluricModel_CO2Lines_Z35PWV05_20240212_v001.npy' ) )
-    grid_absorptions_ch4 = np.load( os.path.join( grid_path, 'hpf_TelluricModel_CH4Lines_Z35PWV05_20240212_v001.npy' ) )
-    grid_absorptions_co2_more = np.load( os.path.join( grid_path, 'hpf_TelluricModel_CO2Lines_420ppm_Z35PWV05_20240212_v001.npy' ) )
+    grid_absorptions_o2 = np.load( os.path.join( grid_path, 'hpf_TelluricModel_O2Lines_Z{:02d}PWV00-{}.npy'.format(zenith_use, grid_name_suffix) ) )
+    grid_absorptions_co2 = np.load( os.path.join( grid_path, 'hpf_TelluricModel_CO2Lines_Z{:02d}CO2420-{}.npy'.format(zenith_use, grid_name_suffix) ) )
+    grid_absorptions_ch4 = np.load( os.path.join( grid_path, 'hpf_TelluricModel_CH4Lines_Z{:02d}CH41860-{}.npy'.format(zenith_use, grid_name_suffix) ) )
 
-    # Empty array to hold the telluric model with: axis 0 = h2o, 1 = o2, 2 = co2, 3 = ch4, 4 = continuum
-    telluric_data = np.empty( shape = ( data_wavelengths.shape[0], data_wavelengths.shape[1], 6 ) )
+    grid_absorptions_lines = grid_absorptions_h2o * grid_absorptions_o2 * grid_absorptions_co2 * grid_absorptions_ch4
+    
+    # Empty array to hold the telluric model with: axis 0 = line absorption, 1 = continuum
+    telluric_data = np.empty( shape = ( data_wavelengths.shape[0], data_wavelengths.shape[1], 2 ) )
     
     for order, order_wavelengths in enumerate( data_wavelengths ):
         
@@ -796,47 +805,20 @@ def generate_full_telluric_model( data_wavelengths, fit_padding, kernel_half_wid
 
             kernel_values = get_variable_lsf_kernel_values( grid_model_wavelength_equal_space_in_pixel, kernel_pixel_arr, lsf_resolution_dict['GLOBAL'], lsf_resolution_dict[order], wavelength_spacing )
 
-        ## Convolve and output H2O model in this wavelength range
-        absorptions_zi_rebin = rebin_spectrum( grid_model_wavelength_equal_space, grid_wavelengths, grid_absorptions_h2o )
+        ## Convolve and output combined lines model in this wavelength range
+        absorptions_zi_rebin = rebin_spectrum( grid_model_wavelength_equal_space, grid_wavelengths, grid_absorptions_lines )
         absorptions_lsfconv = lsf_convolve_per_pixel( grid_model_wavelength_equal_space, absorptions_zi_rebin, kernel_values )
         absorptions_lsfconv_databin = rebin_spectrum( order_wavelengths, grid_model_wavelength_equal_space, absorptions_lsfconv )
 
         telluric_data[order,:,0] = absorptions_lsfconv_databin
-        
-        ## Convolve and output O2 model in this wavelength range
-        absorptions_zi_rebin = rebin_spectrum( grid_model_wavelength_equal_space, grid_wavelengths, grid_absorptions_o2 )
-        absorptions_lsfconv = lsf_convolve_per_pixel( grid_model_wavelength_equal_space, absorptions_zi_rebin, kernel_values )
-        absorptions_lsfconv_databin = rebin_spectrum( order_wavelengths, grid_model_wavelength_equal_space, absorptions_lsfconv )
-
-        telluric_data[order,:,1] = absorptions_lsfconv_databin
-
-        ## Convolve and output CO2 model in this wavelength range
-        absorptions_zi_rebin = rebin_spectrum( grid_model_wavelength_equal_space, grid_wavelengths, grid_absorptions_co2 )
-        absorptions_lsfconv = lsf_convolve_per_pixel( grid_model_wavelength_equal_space, absorptions_zi_rebin, kernel_values )
-        absorptions_lsfconv_databin = rebin_spectrum( order_wavelengths, grid_model_wavelength_equal_space, absorptions_lsfconv )
-
-        telluric_data[order,:,2] = absorptions_lsfconv_databin
-
-        ## Convolve and output CH4 model in this wavelength range
-        absorptions_zi_rebin = rebin_spectrum( grid_model_wavelength_equal_space, grid_wavelengths, grid_absorptions_ch4 )
-        absorptions_lsfconv = lsf_convolve_per_pixel( grid_model_wavelength_equal_space, absorptions_zi_rebin, kernel_values )
-        absorptions_lsfconv_databin = rebin_spectrum( order_wavelengths, grid_model_wavelength_equal_space, absorptions_lsfconv )
-
-        telluric_data[order,:,3] = absorptions_lsfconv_databin
 
         ## Convolve and output continuum model in this wavelength range
         absorptions_zi_rebin = rebin_spectrum( grid_model_wavelength_equal_space, grid_wavelengths, grid_absorptions_cont )
         absorptions_lsfconv = lsf_convolve_per_pixel( grid_model_wavelength_equal_space, absorptions_zi_rebin, kernel_values )
         absorptions_lsfconv_databin = rebin_spectrum( order_wavelengths, grid_model_wavelength_equal_space, absorptions_lsfconv )
 
-        telluric_data[order,:,4] = absorptions_lsfconv_databin
-
-        ## Convolve and output CO2 model in this wavelength range
-        absorptions_zi_rebin = rebin_spectrum( grid_model_wavelength_equal_space, grid_wavelengths, grid_absorptions_co2_more )
-        absorptions_lsfconv = lsf_convolve_per_pixel( grid_model_wavelength_equal_space, absorptions_zi_rebin, kernel_values )
-        absorptions_lsfconv_databin = rebin_spectrum( order_wavelengths, grid_model_wavelength_equal_space, absorptions_lsfconv )
-
-        telluric_data[order,:,5] = absorptions_lsfconv_databin
+        # telluric_data[order,:,4] = absorptions_lsfconv_databin
+        telluric_data[order,:,1] = absorptions_lsfconv_databin
 
     return telluric_data
 
