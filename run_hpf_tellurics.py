@@ -34,7 +34,7 @@ import tellurics_utils
 ### Input argument(s)
 parser = argparse.ArgumentParser(description='Generating telluric model')
 parser.add_argument('data_path', type=str, help='Path to data files')
-parser.add_argument('--grid_name', type=str, default='hpf_lblrtm_hitran_202402', help='Name of the model grid to use')
+parser.add_argument('--grid_name', type=str, default='hpf_lblrtm-aer_20250123_v001', help='Name of the model grid to use')
 parser.add_argument('--instrument', type=str, default='HPF', help='Instrument used for observations')
 parser.add_argument('--output_dir', type=str, default='telluric_output', help='Path to place output at')
 parser.add_argument('--make_plots', type=bool, default=True, help='Path to place output at')
