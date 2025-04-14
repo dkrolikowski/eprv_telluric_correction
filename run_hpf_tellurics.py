@@ -34,9 +34,11 @@ import tellurics_utils
 ### Input argument(s)
 parser = argparse.ArgumentParser(description='Generating telluric model')
 parser.add_argument('data_path', type=str, help='Path to data files')
+parser.add_argument('--grid_name', type=str, default='hpf_lblrtm_hitran_202402', help='Name of the model grid to use')
 parser.add_argument('--instrument', type=str, default='HPF', help='Instrument used for observations')
-parser.add_argument('--output_path', type=str, default='', help='Path to place output at')
+parser.add_argument('--output_dir', type=str, default='telluric_output', help='Path to place output at')
 parser.add_argument('--make_plots', type=bool, default=True, help='Path to place output at')
+parser.add_argument('--skip_existing', type=bool, default=True, help='Skip frames that already have telluric outputs')
 args = parser.parse_args()
 
 ### Input/output: paths and files
@@ -45,10 +47,7 @@ args = parser.parse_args()
 input_file_names = np.sort(glob.glob(os.path.join(args.data_path, '*.fits')))
 
 # Set up the output directory
-if args.output_path == '':
-    output_dir = os.path.join(args.data_path, 'telluric_output')
-else:
-    output_dir = args.output_path
+output_dir = os.path.join(args.data_path, args.output_dir)
 os.makedirs(output_dir, exist_ok=True)
 
 # Set up plot output directory if needed
@@ -56,7 +55,7 @@ if args.make_plots:
     os.makedirs(os.path.join(output_dir, 'plots'), exist_ok=True)
 
 # Telluric grid path (will be flexible in future)
-telluric_model_grid_path = 'models/hpf_lblrtm_hitran_202402/'
+telluric_model_grid_path = os.path.join('models/', args.grid_name)
 
 ### Read in reference data (LSFs, blazes)
 
@@ -99,6 +98,11 @@ kernel_half_width_wave = 0.5
 for i_file, file_name in enumerate(tqdm.tqdm(input_file_names)):
 
     ### File prep
+
+    # Check if the output file exists
+    output_file_name = os.path.join(output_dir, os.path.basename(file_name))
+    if os.path.exists(output_file_name) and args.skip_existing:
+        continue
 
     # Read the input data file in
     file_in = fits.open(file_name)
@@ -170,9 +174,8 @@ for i_file, file_name in enumerate(tqdm.tqdm(input_file_names)):
     ## Construct telluric extension for the output FITS file
 
     # Put together individual models into: line and continuum models
-    # (In this case 0 is H2O, 1 is O2, 3 is CH4, and 5 is CO2)
-    line_model_data = full_telluric_model[:,:,0] * full_telluric_model[:,:,1] * full_telluric_model[:,:,3] * full_telluric_model[:,:,5]
-    continuum_model_data = full_telluric_model[:,:,4]
+    line_model_data = full_telluric_model[:,:,0]
+    continuum_model_data = full_telluric_model[:,:,1]
 
     # Make the HDU
     hdu_data = np.array([line_model_data, continuum_model_data])
@@ -186,9 +189,8 @@ for i_file, file_name in enumerate(tqdm.tqdm(input_file_names)):
     date_created = datetime.datetime.now().strftime('%Y/%m/%d')
     telluric_hdu.header.add_history(f'Generated {date_created}. Preliminary version with {telluric_model_grid_path} model grid')
 
-    # Create output file
-    output_hdu_list = copy.copy(file_in)
+    # Create output file - exclude any potential extraneous extensions
+    output_hdu_list = copy.copy(file_in)[:10]
     output_hdu_list.append(telluric_hdu)
 
-    output_file_name = os.path.join(output_dir, os.path.basename(file_name))
     output_hdu_list.writeto(output_file_name, overwrite=True)
