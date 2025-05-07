@@ -119,6 +119,9 @@ for i_file, file_name in enumerate(tqdm.tqdm(input_file_names)):
     else:
         blaze_use = blaze_hpf_post
 
+    # Get the true zenith angle of the observation
+    obs_zenith_angle = tellurics_utils.get_hpf_zenith_angle(file_in[0].header)
+
     ### Fit the water vapor value!
 
     pwv_fit_results = tellurics_utils.fit_pwv_hpf(file_in[7].data, flux_skysub, blaze_use,

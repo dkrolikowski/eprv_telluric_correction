@@ -17,8 +17,12 @@ import os
 import re
 
 # Third party imports
+from astropy import coordinates, time, units
 import numpy as np
 from scipy import interpolate, optimize, special, stats
+
+# McDonald Observatory location from astropy
+mcdonald_location = coordinates.EarthLocation.of_site('McDonald')
 
 ##### Functions
 
@@ -1009,3 +1013,32 @@ def convolve_full_spectrum( data_wavelengths, fit_padding, kernel_half_width, ls
 
     return telluric_data
 
+### Instrument specific utility functions
+
+def get_hpf_zenith_angle(hpf_header):
+
+    # Get observation time from the header
+    obs_jd = time.Time(hpf_header['jd_fw0'], format='jd')
+
+    # First see if the QRA/QDEC header keys have values
+    if hpf_header['QRA'] != '':
+        q_coord = coordinates.SkyCoord(ra=hpf_header['QRA'], dec=hpf_header['QDEC'], 
+                                       unit=(units.hourangle, units.deg))
+        altitude = q_coord.transform_to(coordinates.AltAz(obstime=obs_jd, 
+                                                          location=mcdonald_location)).alt.value
+        coo_used = 'Q Coordinates'
+    else:
+        if hpf_header['RA'] != '':
+            coord = coordinates.SkyCoord(ra=hpf_header['RA'], dec=hpf_header['DEC'], 
+                                        unit=(units.hourangle, units.deg))
+            altitude = coord.transform_to(coordinates.AltAz(obstime=obs_jd, 
+                                                            location=mcdonald_location)).alt.value
+            coo_used = 'TCS Coordinates'
+        else:
+            altitude = hpf_header['el']
+            coo_used = 'Header Altitude'
+
+    # Convert altitude to zenith angle
+    zenith_angle = 90 - altitude
+
+    return zenith_angle, coo_used
