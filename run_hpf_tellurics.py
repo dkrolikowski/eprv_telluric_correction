@@ -119,8 +119,8 @@ for i_file, file_name in enumerate(tqdm.tqdm(input_file_names)):
     else:
         blaze_use = blaze_hpf_post
 
-    # Get the true zenith angle of the observation
-    obs_zenith_angle = tellurics_utils.get_hpf_zenith_angle(file_in[0].header)
+    # Get the true zenith angle of the observation, and a string of the coordinates used
+    obs_zenith_angle, za_coo_type = tellurics_utils.get_hpf_zenith_angle(file_in[0].header)
 
     ### Fit the water vapor value!
 
@@ -182,15 +182,19 @@ for i_file, file_name in enumerate(tqdm.tqdm(input_file_names)):
 
     # Make the HDU
     hdu_data = np.array([line_model_data, continuum_model_data])
-    hdu_header = fits.Header({'EXTNAME': 'Telluric', 'PWV': np.round(pwv_fit_results[0], 5)})
+    hdu_header = fits.Header({'EXTNAME': 'Telluric', 
+                              'PWV': np.round(pwv_fit_results[0], 5),
+                              'ZACALC': np.round(obs_zenith_angle, 5)})
 
     telluric_hdu = fits.hdu.ImageHDU(data=hdu_data, header=hdu_header)
 
     # Notes/comments
     telluric_hdu.header.comments['PWV'] = 'Best fit PWV value (mm)'
+    telluric_hdu.header.comments['ZACALC'] = 'Calculated zenith angle for observation (deg)'
 
     date_created = datetime.datetime.now().strftime('%Y/%m/%d')
     telluric_hdu.header.add_history(f'Generated {date_created}. Preliminary version with {telluric_model_grid_path} model grid')
+    telluric_hdu.header.add_history(f'Coordinates for zenith angle calculation: {za_coo_type}.')
 
     # Create output file - exclude any potential extraneous extensions
     output_hdu_list = copy.copy(file_in)[:10]
