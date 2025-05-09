@@ -443,54 +443,119 @@ def get_variable_lsf_kernel_values( input_pixel_arr, kernel_pixel_arr, kernel_pr
 
 ##### Functions related to the telluric model grid
 
-def parse_model_grid_points_hpf( grid_path ):
-    """ Function to search a directory of telluric model grid and return the zenith angle/PWV grid point values, along with the grid wavelength array.
-    Adapted from the NEID DRP
+def interpolate_model_grid_hpf_any(grid_path, zenith, abundance, species):
 
-    Parameters
-    ----------
-    grid_path : str
-        The path to the telluric model grid directory.
-
-    Returns
-    -------
-    zeniths : array
-        An array of the zenith angle values included in the telluric model grid.
-    waters : array
-        An array of the precipitable water vapor columm values (mm) included in the telluric model grid.
-    wavelengths : array
-        The telluric model grid wavelength array.
-    """
+    species_codes = {'H2O': 'PWV', 'CO2': 'CO2', 'CH4': 'CH4', 'O2': 'PWV', 'Continuum': 'PWV'}
+    species_digits = {'H2O': 2, 'CO2': 3, 'CH4': 4, 'O2': 2, 'Continuum': 2}
     
+    # Parse the model grid
+    zeniths, abundances, wavelengths = parse_model_grid_points_hpf_any(grid_path, 
+                                                                       species_codes[species], 
+                                                                       species_digits[species])
+
+    # Find model grid point(s) which the interpolation point lies between or at
+    near_zeniths = nearest_points(zeniths, zenith)
+    near_abundances = nearest_points(abundances, abundance)
+    
+    # Construct a grid using the nearest data points
+    grid_points = []
+    if (len(near_zeniths) > 1):
+        grid_points.append(near_zeniths)
+    if (len(near_abundances) > 1):
+        grid_points.append(near_abundances)
+    grid_points.append(wavelengths[:])
+
+    # Acquire grid values from disk
+    grid_values_shape = []
+    if (len(near_zeniths) > 1):
+        grid_values_shape.append(len(near_zeniths))
+    if (len(near_abundances) > 1):
+        grid_values_shape.append(len(near_abundances))
+    grid_values_shape.append(len(wavelengths))
+
+    grid_values_shape = tuple(grid_values_shape)
+
+    grid_values = np.empty(shape = grid_values_shape)
+    for i, near_zenith in enumerate(near_zeniths):
+        for j, near_abundance in enumerate(near_abundances):
+            # Load telluric transmission spectrum
+            zenith_str = 'Z%02d' % near_zenith
+
+            abundance_str = species_codes[species] + '{:0' + str(species_digits[species]) + '}'
+            abundance_str = abundance_str.format(near_abundance)
+            # abundance_str = 'PWV%02d' % near_water
+
+            spectrum_search = glob.glob(os.path.join(grid_path, 
+                                                     'hpf_TelluricModel_{}*{}{}*.npy'.format(species, zenith_str, abundance_str)))
+                            
+            spectrum_search.sort()
+            
+            spectrum_path = spectrum_search[0]
+
+            values = np.load(spectrum_path)
+
+            # Place values in larger array
+            indexed = grid_values[:]
+
+            if (len(near_zeniths) > 1):
+                indexed = indexed[i]
+
+            if (len(near_abundances) > 1):
+                indexed = indexed[j]
+
+            indexed[:] = values
+
+    # Construct interpolation array
+    interpolate_points = np.empty(shape = (len(wavelengths), len(grid_points)))
+
+    index = 0
+    if (len(near_zeniths) > 1):
+        interpolate_points[:, index] = np.full(len(wavelengths), zenith)
+        index += 1
+
+    if (len(near_abundances) > 1):
+        interpolate_points[:, index] = np.full(len(wavelengths), abundance)
+        index += 1
+
+    interpolate_points[:, index] = wavelengths[:]
+
+    # interpolate the grid
+    absorptions = interpolate.interpn(grid_points, grid_values, interpolate_points)
+
+    return absorptions
+
+def parse_model_grid_points_hpf_any(grid_path, abundance_code, abundance_digits):
+
     # Generate a list of all model files. HPF only has a single zenith angle value, but this convention is retained from NEID
-    files = glob.glob( os.path.join( grid_path, '*Z[0-9][0-9]PWV[0-9][0-9]*.npy' ) )
+    files = glob.glob(os.path.join(grid_path, f'*Z*{abundance_code}*.npy'))
 
     # Initialize lists for each zenith angle/PWV grid point
     zeniths = []
-    waters  = []
+    abundances = []
 
     # Parse each file name for zenith angle and water vapor
     for file in files:
-        
-        file_match = re.search( 'Z(\d{2})PWV(\d{2})', os.path.basename( file ) )
-        
+
+        search_str = 'Z(\d{2})' + abundance_code + '(\d{' + str(abundance_digits) + '})'
+        file_match = re.search(search_str, os.path.basename(file))
+
         if file_match:
-            zenith = int( file_match[1] )
-            water  = int( file_match[2] )
+            zenith = int(file_match[1])
+            abundance = int(file_match[2])
             
-            zeniths.append( zenith )
-            waters.append( water )
+            zeniths.append(zenith)
+            abundances.append(abundance)
 
     # Sort zenith/PWV lists and only return unique points
-    zeniths = np.sort( np.unique( zeniths ) )
-    waters = np.sort( np.unique( waters ) )
+    zeniths = np.sort(np.unique(zeniths))
+    abundances = np.sort(np.unique(abundances))
 
     # Get potential telluric model grid wavelengths files -- and read in the first file name returned in the search
-    wavelengths_search = glob.glob( os.path.join( grid_path, '*Wavelengths*.npy' ) )
+    wavelengths_search = glob.glob(os.path.join(grid_path, '*Wavelengths*.npy'))
     
-    wavelengths = np.load( wavelengths_search[0] )
+    wavelengths = np.load(wavelengths_search[0])
 
-    return zeniths, waters, wavelengths
+    return zeniths, abundances, wavelengths
 
 ### Convolution functions
 
@@ -546,14 +611,11 @@ def lsf_convolve_per_pixel( input_wave_arr, input_flux_arr, convolution_kernel_v
     return convolved_flux_arr
 
 
-def fit_pwv_hpf( data_wavelengths, data_fluxes, blaze, fit_padding, kernel_half_width, lsf_type, fit_ranges, grid_path, lsf_fit_results = None, ortho_poly = None, fit_method = 'ratio' ):
+def fit_pwv_hpf( data_wavelengths, data_fluxes, blaze, zenith_use, fit_padding, kernel_half_width, lsf_type, fit_ranges, grid_path, lsf_fit_results = None, ortho_poly = None, fit_method = 'ratio' ):
      
     # Pull telluric model grid info -- the zenith angle/water column grid points and the full model wavelength array
     grid_zeniths, grid_waters, grid_wavelengths = parse_model_grid_points_hpf( grid_path )
     grid_name_suffix = os.path.basename(grid_path).split('-')[-1]
-
-    # Temporary use of the only zenith angle in the grid
-    zenith_use = grid_zeniths[0]
 
     # Initializing the grid values for interpolation: first array is the set of PWV grid points and the second will hold the fit range data wavelength values
     fit_grid_points = [ grid_waters, [] ]
@@ -663,7 +725,8 @@ def fit_pwv_hpf( data_wavelengths, data_fluxes, blaze, fit_padding, kernel_half_
         for i_water, water in enumerate( grid_waters ):
 
             # Interpolate the line absorption model at the grid water vapor value to the given zenith angle (zi = zenith interpolated)
-            absorptions_zi = np.load( os.path.join( grid_path, 'hpf_TelluricModel_H2OLines_Z{:02d}PWV{:02d}-{}.npy'.format( zenith_use, water, grid_name_suffix ) ) )
+            # absorptions_zi = np.load( os.path.join( grid_path, 'hpf_TelluricModel_H2OLines_Z{:02d}PWV{:02d}-{}.npy'.format( zenith_use, water, grid_name_suffix ) ) )
+            absorptions_zi = interpolate_model_grid_hpf_any(grid_path, zenith_use, water, 'H2O')
 
             # Rebin the model to the padded equally spaced wavelength grid
             absorptions_zi_rebin = rebin_spectrum( grid_model_wavelength_equal_space, grid_wavelengths, absorptions_zi )
@@ -722,23 +785,20 @@ def fit_pwv_hpf( data_wavelengths, data_fluxes, blaze, fit_padding, kernel_half_
 
     return water_fit, wavelengths_to_fit, fluxes_to_fit, best_fit_model
 
-def generate_full_telluric_model( data_wavelengths, fit_padding, kernel_half_width, lsf_type, fit_pwv_value, grid_path, lsf_fit_results = None, ortho_poly = None ):
+def generate_full_telluric_model(data_wavelengths, zenith_use, fit_padding, kernel_half_width, 
+                                 lsf_type, fit_pwv_value, grid_path, lsf_fit_results=None, 
+                                 ortho_poly=None):
      
     # Pull telluric model grid info -- the zenith angle/water column grid points and the full model wavelength array
-    grid_zeniths, grid_waters, grid_wavelengths = parse_model_grid_points_hpf( grid_path )
+    grid_zeniths, grid_waters, grid_wavelengths = parse_model_grid_points_hpf_any(grid_path, 'PWV', 2)
     grid_name_suffix = os.path.basename(grid_path).split('-')[-1]
 
-    # Temporary use of the only zenith angle in the grid
-    zenith_use = grid_zeniths[0]
-
-    # Interpolate continuum and H2O model to the fit PWV value
-    grid_absorptions_h2o = interpolate_model_grid_hpf( grid_path, zenith_use, fit_pwv_value, 'lines' )
-    grid_absorptions_cont = interpolate_model_grid_hpf( grid_path, zenith_use, fit_pwv_value, 'continuum' )
-    
-    # Read in the other species
-    grid_absorptions_o2 = np.load( os.path.join( grid_path, 'hpf_TelluricModel_O2Lines_Z{:02d}PWV00-{}.npy'.format(zenith_use, grid_name_suffix) ) )
-    grid_absorptions_co2 = np.load( os.path.join( grid_path, 'hpf_TelluricModel_CO2Lines_Z{:02d}CO2420-{}.npy'.format(zenith_use, grid_name_suffix) ) )
-    grid_absorptions_ch4 = np.load( os.path.join( grid_path, 'hpf_TelluricModel_CH4Lines_Z{:02d}CH41860-{}.npy'.format(zenith_use, grid_name_suffix) ) )
+    # Interpolate the moels to the correct zenith angle and abundance (in this case, PWV)
+    grid_absorptions_h2o = interpolate_model_grid_hpf_any(grid_path, zenith_use, fit_pwv_value, 'H2O')
+    grid_absorptions_cont = interpolate_model_grid_hpf_any(grid_path, zenith_use, fit_pwv_value, 'Continuum')
+    grid_absorptions_o2 = interpolate_model_grid_hpf_any(grid_path, zenith_use, 0, 'O2')
+    grid_absorptions_co2 = interpolate_model_grid_hpf_any(grid_path, zenith_use, 420, 'CO2')
+    grid_absorptions_ch4 = interpolate_model_grid_hpf_any(grid_path, zenith_use, 1860, 'CH4')
 
     grid_absorptions_lines = grid_absorptions_h2o * grid_absorptions_o2 * grid_absorptions_co2 * grid_absorptions_ch4
     
@@ -825,81 +885,6 @@ def generate_full_telluric_model( data_wavelengths, fit_padding, kernel_half_wid
         telluric_data[order,:,1] = absorptions_lsfconv_databin
 
     return telluric_data
-
-def interpolate_model_grid_hpf( grid_path, zenith, water, grid_type ):
-    
-    # Parse the model grid
-    zeniths, waters, wavelengths = parse_model_grid_points_hpf( grid_path )
-
-    # Find model grid point(s) which the interpolation point lies between or at
-    near_zeniths = nearest_points(zeniths, zenith)
-    near_waters  = nearest_points(waters, water)
-    
-    # Construct a grid using the nearest data points
-    grid_points = []
-    if (len(near_zeniths) > 1):
-        grid_points.append(near_zeniths)
-    if (len(near_waters) > 1):
-        grid_points.append(near_waters)
-    grid_points.append(wavelengths[:])
-
-    # Acquire grid values from disk
-    grid_values_shape = []
-    if (len(near_zeniths) > 1):
-        grid_values_shape.append(len(near_zeniths))
-    if (len(near_waters) > 1):
-        grid_values_shape.append(len(near_waters))
-    grid_values_shape.append(len(wavelengths))
-
-    grid_values_shape = tuple(grid_values_shape)
-
-    grid_values = np.empty(shape = grid_values_shape)
-    for i, near_zenith in enumerate(near_zeniths):
-        for j, near_water in enumerate(near_waters):
-            # Load telluric transmission spectrum
-            zenith_str = 'Z%02d' % near_zenith
-            water_str = 'PWV%02d' % near_water
-            
-            if grid_type == 'lines': # The grid of line absorption models
-                spectrum_search = glob.glob( os.path.join( grid_path, 'hpf_TelluricModel_H2O*{:}{:}*.npy'.format( zenith_str, water_str ) ) )
-            elif grid_type == 'continuum': # The grid of continuum absorption models
-                spectrum_search = glob.glob( os.path.join( grid_path, 'hpf_TelluricModel_Continuum_{:}{:}*.npy'.format( zenith_str, water_str ) ) )
-                
-            spectrum_search.sort()
-            
-            spectrum_path = spectrum_search[0]
-
-            values = np.load(spectrum_path)
-
-            # Place values in larger array
-            indexed = grid_values[:]
-
-            if (len(near_zeniths) > 1):
-                indexed = indexed[i]
-
-            if (len(near_waters) > 1):
-                indexed = indexed[j]
-
-            indexed[:] = values
-
-    # Construct interpolation array
-    interpolate_points = np.empty(shape = (len(wavelengths), len(grid_points)))
-
-    index = 0
-    if (len(near_zeniths) > 1):
-        interpolate_points[:, index] = np.full(len(wavelengths), zenith)
-        index += 1
-
-    if (len(near_waters) > 1):
-        interpolate_points[:, index] = np.full(len(wavelengths), water)
-        index += 1
-
-    interpolate_points[:, index] = wavelengths[:]
-
-    # interpolate the grid
-    absorptions = interpolate.interpn(grid_points, grid_values, interpolate_points)
-
-    return absorptions
 
 def nearest_points(values, value):
     """Returns a list of points within values bounding the given value
@@ -1042,3 +1027,129 @@ def get_hpf_zenith_angle(hpf_header):
     zenith_angle = 90 - altitude
 
     return zenith_angle, coo_used
+
+### Deprecated
+
+def interpolate_model_grid_hpf( grid_path, zenith, water, grid_type ):
+    
+    # Parse the model grid
+    zeniths, waters, wavelengths = parse_model_grid_points_hpf( grid_path )
+
+    # Find model grid point(s) which the interpolation point lies between or at
+    near_zeniths = nearest_points(zeniths, zenith)
+    near_waters  = nearest_points(waters, water)
+    
+    # Construct a grid using the nearest data points
+    grid_points = []
+    if (len(near_zeniths) > 1):
+        grid_points.append(near_zeniths)
+    if (len(near_waters) > 1):
+        grid_points.append(near_waters)
+    grid_points.append(wavelengths[:])
+
+    # Acquire grid values from disk
+    grid_values_shape = []
+    if (len(near_zeniths) > 1):
+        grid_values_shape.append(len(near_zeniths))
+    if (len(near_waters) > 1):
+        grid_values_shape.append(len(near_waters))
+    grid_values_shape.append(len(wavelengths))
+
+    grid_values_shape = tuple(grid_values_shape)
+
+    grid_values = np.empty(shape = grid_values_shape)
+    for i, near_zenith in enumerate(near_zeniths):
+        for j, near_water in enumerate(near_waters):
+            # Load telluric transmission spectrum
+            zenith_str = 'Z%02d' % near_zenith
+            water_str = 'PWV%02d' % near_water
+            
+            if grid_type == 'lines': # The grid of line absorption models
+                spectrum_search = glob.glob( os.path.join( grid_path, 'hpf_TelluricModel_H2O*{:}{:}*.npy'.format( zenith_str, water_str ) ) )
+            elif grid_type == 'continuum': # The grid of continuum absorption models
+                spectrum_search = glob.glob( os.path.join( grid_path, 'hpf_TelluricModel_Continuum_{:}{:}*.npy'.format( zenith_str, water_str ) ) )
+                
+            spectrum_search.sort()
+            
+            spectrum_path = spectrum_search[0]
+
+            values = np.load(spectrum_path)
+
+            # Place values in larger array
+            indexed = grid_values[:]
+
+            if (len(near_zeniths) > 1):
+                indexed = indexed[i]
+
+            if (len(near_waters) > 1):
+                indexed = indexed[j]
+
+            indexed[:] = values
+
+    # Construct interpolation array
+    interpolate_points = np.empty(shape = (len(wavelengths), len(grid_points)))
+
+    index = 0
+    if (len(near_zeniths) > 1):
+        interpolate_points[:, index] = np.full(len(wavelengths), zenith)
+        index += 1
+
+    if (len(near_waters) > 1):
+        interpolate_points[:, index] = np.full(len(wavelengths), water)
+        index += 1
+
+    interpolate_points[:, index] = wavelengths[:]
+
+    # interpolate the grid
+    absorptions = interpolate.interpn(grid_points, grid_values, interpolate_points)
+
+    return absorptions
+
+def parse_model_grid_points_hpf( grid_path ):
+    """ Function to search a directory of telluric model grid and return the zenith angle/PWV grid point values, along with the grid wavelength array.
+    Adapted from the NEID DRP
+
+    Parameters
+    ----------
+    grid_path : str
+        The path to the telluric model grid directory.
+
+    Returns
+    -------
+    zeniths : array
+        An array of the zenith angle values included in the telluric model grid.
+    waters : array
+        An array of the precipitable water vapor columm values (mm) included in the telluric model grid.
+    wavelengths : array
+        The telluric model grid wavelength array.
+    """
+    
+    # Generate a list of all model files. HPF only has a single zenith angle value, but this convention is retained from NEID
+    files = glob.glob( os.path.join( grid_path, '*Z[0-9][0-9]PWV[0-9][0-9]*.npy' ) )
+
+    # Initialize lists for each zenith angle/PWV grid point
+    zeniths = []
+    waters  = []
+
+    # Parse each file name for zenith angle and water vapor
+    for file in files:
+        
+        file_match = re.search( 'Z(\d{2})PWV(\d{2})', os.path.basename( file ) )
+        
+        if file_match:
+            zenith = int( file_match[1] )
+            water  = int( file_match[2] )
+            
+            zeniths.append( zenith )
+            waters.append( water )
+
+    # Sort zenith/PWV lists and only return unique points
+    zeniths = np.sort( np.unique( zeniths ) )
+    waters = np.sort( np.unique( waters ) )
+
+    # Get potential telluric model grid wavelengths files -- and read in the first file name returned in the search
+    wavelengths_search = glob.glob( os.path.join( grid_path, '*Wavelengths*.npy' ) )
+    
+    wavelengths = np.load( wavelengths_search[0] )
+
+    return zeniths, waters, wavelengths
