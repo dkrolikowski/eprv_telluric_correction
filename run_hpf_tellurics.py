@@ -125,6 +125,7 @@ for i_file, file_name in enumerate(tqdm.tqdm(input_file_names)):
     ### Fit the water vapor value!
 
     pwv_fit_results = tellurics_utils.fit_pwv_hpf(file_in[7].data, flux_skysub, blaze_use,
+                                                  obs_zenith_angle,
                                                   fit_padding=fit_padding_wave,
                                                   kernel_half_width=kernel_half_width_wave,
                                                   lsf_type='gauss_poly_model',
@@ -165,7 +166,8 @@ for i_file, file_name in enumerate(tqdm.tqdm(input_file_names)):
 
     # Generate full telluric model at the best fit precipitable water vapor value for all orders
     # Models generated for multiple species and continuum
-    full_telluric_model = tellurics_utils.generate_full_telluric_model(file_in[7].data, 
+    full_telluric_model = tellurics_utils.generate_full_telluric_model(file_in[7].data,
+                                                                       obs_zenith_angle, 
                                                                        fit_padding=fit_padding_wave, 
                                                                        kernel_half_width=kernel_half_width_wave, 
                                                                        lsf_type='gauss_poly_model',
